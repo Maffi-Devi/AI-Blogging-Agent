@@ -1,0 +1,15 @@
+{
+  "verdict": "pass",
+  "claimsChecked": 16,
+  "claimsRemovedOrRewritten": [
+    "Removed 'first results are mostly directory listings and social media posts' and 'hundreds of similar entries': not supported by any opened source.",
+    "Removed 'SEO service ... Business Profile ... covers this work after launch': the SEO page lists titles, headings, content, internal links, structure and monthly reporting, and treats Business Profile as local SEO. Rewritten to match."
+  ],
+  "changes": [
+    "Rewrote the directory-listing paragraph in 'Why a listing alone is not enough' to general, checkable wording.",
+    "Rewrote the A&N Web Services section so the SEO and local SEO descriptions match anwebservice.com. Links, title and sources unchanged.",
+    "validate.mjs: ok, 830 words, no errors or warnings."
+  ],
+  "reasons": [],
+  "summary": "Passed after two fixes: I took out two unsupported claims about directory results, and I corrected how the SEO and Business Profile work is described so it matches the site. Google quotes were confirmed on the two source pages, the cover is clean, and the post has a usable checklist and a plain A&N Web Services section."
+}
