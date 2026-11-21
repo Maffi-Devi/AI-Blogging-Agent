@@ -1,0 +1,116 @@
+name: Daily Blogger post
+
+# Writes one post a day and hands it to Blogger's own scheduler for 10:00 AM IST.
+# GitHub starts scheduled runs late on busy days, so the run starts hours early and
+# a second run later in the morning does the work only if the first one did not.
+on:
+  schedule:
+    - cron: '30 20 * * *' # 02:00 AM IST
+    - cron: '30 1 * * *' # 07:00 AM IST (does nothing if today's post exists)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Write the post but do not send it to Blogger'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: daily-post
+  cancel-in-progress: false
+
+jobs:
+  post:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      DRAFT_FIRST: ${{ vars.DRAFT_FIRST || '3' }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Is a post needed today?
+        id: ctx
+        env:
+          READY: ${{ secrets.BLOGGER_REFRESH_TOKEN != '' && secrets.BLOGGER_BLOG_ID != '' && (secrets.CLAUDE_CODE_OAUTH_TOKEN != '' || secrets.ANTHROPIC_API_KEY != '') }}
+        run: |
+          if [ "$READY" != "true" ]; then
+            echo "::notice::Setup is not finished: the Blogger and Claude secrets are missing (README, Setup). Nothing was posted."
+            echo "needed=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node scripts/context.mjs --github
+
+      # The writer gets only the research and image keys. It never sees the Blogger token.
+      - name: Research and write (Claude)
+        if: steps.ctx.outputs.needed == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL || 'sonnet' }}
+          SERPAPI_API_KEY: ${{ secrets.SERPAPI_API_KEY }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          PEXELS_API_KEY: ${{ secrets.PEXELS_API_KEY }}
+          GSC_SERVICE_ACCOUNT_JSON: ${{ secrets.GSC_SERVICE_ACCOUNT_JSON }}
+        run: |
+          if [ -n "$API_KEY" ]; then export ANTHROPIC_API_KEY="$API_KEY"; fi
+          npm install -g @anthropic-ai/claude-code
+          claude -p "Read agent/daily-run.md and carry it out completely." \
+            --model "$CLAUDE_MODEL" \
+            --max-turns 150 \
+            --allowedTools "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Bash(node:*)"
+
+      # A second, independent pass: fact check against the sources and Google's content rules.
+      - name: Editor's review (Claude)
+        if: steps.ctx.outputs.needed == 'true'
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          CLAUDE_MODEL: ${{ vars.CLAUDE_MODEL || 'sonnet' }}
+        run: |
+          if [ ! -f out/post.json ]; then echo "No post to review."; exit 0; fi
+          if [ -n "$API_KEY" ]; then export ANTHROPIC_API_KEY="$API_KEY"; fi
+          claude -p "Read agent/review.md and carry it out completely." \
+            --model "$CLAUDE_MODEL" \
+            --max-turns 100 \
+            --allowedTools "Read,Write,Edit,Glob,Grep,WebSearch,WebFetch,Bash(node:*)"
+
+      - name: Self-check and send to Blogger
+        if: steps.ctx.outputs.needed == 'true'
+        env:
+          BLOGGER_CLIENT_ID: ${{ secrets.BLOGGER_CLIENT_ID }}
+          BLOGGER_CLIENT_SECRET: ${{ secrets.BLOGGER_CLIENT_SECRET }}
+          BLOGGER_REFRESH_TOKEN: ${{ secrets.BLOGGER_REFRESH_TOKEN }}
+          BLOGGER_BLOG_ID: ${{ secrets.BLOGGER_BLOG_ID }}
+          ASSETS_REPO: ${{ secrets.ASSETS_REPO }}
+          ASSETS_DEPLOY_KEY: ${{ secrets.ASSETS_DEPLOY_KEY }}
+          ASSETS_TOKEN: ${{ secrets.ASSETS_TOKEN }}
+        run: node scripts/publish.mjs ${{ inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Save the log
+        if: always()
+        run: |
+          git config user.name "A&N Blogger Agent"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add state log
+          git diff --cached --quiet || git commit -m "Log: $(TZ=Asia/Kolkata date +%F)"
+          git push
+
+      - name: Keep the post files for 14 days
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: post-${{ github.run_id }}
+          path: out/
+          if-no-files-found: ignore
+          retention-days: 14
